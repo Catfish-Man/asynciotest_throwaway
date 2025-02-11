@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "type": "swift-lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:demo}",
+            "name": "Debug demo",
+            "program": "${workspaceFolder:demo}/.build/debug/demo",
+            "preLaunchTask": "swift: Build Debug demo"
+        },
+        {
+            "type": "swift-lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:demo}",
+            "name": "Release demo",
+            "program": "${workspaceFolder:demo}/.build/release/demo",
+            "preLaunchTask": "swift: Build Release demo"
+        }
+    ]
+}

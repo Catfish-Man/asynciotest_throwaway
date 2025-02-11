@@ -1,0 +1,15 @@
+{
+  "originHash" : "99b10d944974e436bf30cf1069517209cd19f83c2f818762d9c612c6e9c038fc",
+  "pins" : [
+    {
+      "identity" : "swift-system",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-system",
+      "state" : {
+        "branch" : "david/ioring",
+        "revision" : "d4ca4129a033c04efb863827e9178101434c44df"
+      }
+    }
+  ],
+  "version" : 3
+}

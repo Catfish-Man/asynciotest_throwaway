@@ -1,12 +1,19 @@
-import SystemPackage
 import CSystem
-import Foundation
+import Dispatch
+import SystemPackage
 
 @main
 struct MainApp {
-    @convention(c)
-    static func data_ready() {
+    static func handleOpenCompletion(_ completion: IOCompletion) {
+        print("Opened file with result \(completion.result)")
+    }
 
+    static func handleReadCompletion(_ completion: IOCompletion, buffer: IORingBuffer) {
+        print("Got buffer \(buffer.unsafeBuffer)")
+    }
+
+    static func handleCloseCompletion(_ completion: IOCompletion) {
+        print("Closed file with result \(completion.result)")
     }
 
     static func main() async throws {
@@ -16,16 +23,36 @@ struct MainApp {
         let buf = UnsafeMutableRawBufferPointer.allocate(byteCount: 65535, alignment: 0)
         let buffer = ring.registerBuffers(buf).first!
         let efd = eventfd(0, Int32(EFD_NONBLOCK))
-
         try ring.registerEventFD(FileDescriptor(rawValue: efd))
+        let readSrc = DispatchSource.makeReadSource(fileDescriptor: efd)
+        var completedOperationCount = 0
+
+        readSrc.setEventHandler(
+            handler: DispatchWorkItem {
+                while let completion = ring.tryConsumeCompletion() {
+                    switch completedOperationCount {
+                    case 0: 
+                        handleOpenCompletion(completion)
+                    case 1: 
+                        handleReadCompletion(completion, buffer: buffer)
+                    case 2: 
+                        handleCloseCompletion(completion)
+                    default:
+                        fatalError()
+                    }
+
+                    completedOperationCount += 1
+                }
+            })
+        readSrc.activate()
         try ring.submit(
             linkedRequests:
-            .opening(
-                "test.txt",
-                in: parent,
-                into: file,
-                mode: .readOnly
-            ),
+                .opening(
+                    "test.txt",
+                    in: parent,
+                    into: file,
+                    mode: .readOnly
+                ),
             .reading(
                 file,
                 into: buffer
@@ -34,9 +61,5 @@ struct MainApp {
                 file
             )
         )
-        let epollFD = epoll_create(1)
-        var epoll_evt = epoll_event() //see CFRunLoop.c for example epoll usage
-        epoll_evt.events = EPOLLIN | EPOLLET
-        epoll_ctl(epollFD, efd, EPOLL_CTL_ADD, &epoll_evt)
     }
 }

@@ -1,3 +1,4 @@
+import Algorithms
 import CSystem
 import Dispatch
 import Glibc
@@ -28,8 +29,11 @@ func handleCloseCompletion(_ completion: IOCompletion) {
     print(
         "Closed file with result \(String(cString: strerror(-completion.result))), completion \(completion)"
     )
-    CSystem._exit(0)
+   // CSystem._exit(0)
 }
+
+func FILE_COUNT() -> UInt32 { 16 }
+func FILE_COUNT() -> Int { 16 }
 
 @main
 struct MainApp {
@@ -38,23 +42,22 @@ struct MainApp {
         print("Running...")
         let cwdbuf = getcwd(nil, 0)!
         print("cwd is \(String(cString: cwdbuf))")
-        var ring = try IORing(queueDepth: 1024)
+        var ring = try IORing(queueDepth: FILE_COUNT() * 6)
         do {
-            let files = ring.registerFileSlots(count: 512)
-            let slab = UnsafeMutableRawBufferPointer.allocate(byteCount: 32 * 512, alignment: 0)
-                .dropFirst(0)
-            withUnsafeTemporaryAllocation(of: UnsafeMutableRawBufferPointer.self, capacity: 512) {
-                ptrs in
-                for i in 1...512 {
-                    ptrs[i] = UnsafeMutableRawBufferPointer(rebasing: slab.dropFirst(32))
-                    ptrs[i].storeBytes(of: i, as: Int.self)
-                }
-                _ = ring.registerBuffers(ptrs)
+            let files = ring.registerFileSlots(count: FILE_COUNT())
+            let slab = UnsafeMutableRawBufferPointer.allocate(byteCount: 32 * FILE_COUNT(), alignment: 0)
+                .evenlyChunked(in: FILE_COUNT())
+
+            for (i, chunk) in zip(0 ..< FILE_COUNT(), slab) {
+                chunk.storeBytes(of: i, as: Int.self)
             }
-            let buffers = ring.registeredBuffers
+            let bPtrs = slab.lazy.map { 
+                UnsafeMutableRawBufferPointer(rebasing: $0)
+            }
+            let buffers = ring.registerBuffers(bPtrs)
             let efd = eventfd(0, Int32(EFD_NONBLOCK))
 
-            for i in 0..<512 {
+            for i in 0 ..< FILE_COUNT() {
                 ring.prepare(
                     linkedRequests:
                         .opening(
@@ -62,7 +65,8 @@ struct MainApp {
                             in: .currentWorkingDirectory,
                             into: files[i],
                             mode: .readWrite,
-                            options: .create
+                            options: .create,
+                            permissions: .ownerReadWrite
                         ),
                     .writing(
                         buffers[i],
@@ -74,7 +78,7 @@ struct MainApp {
                 )
             }
 
-            try ring.registerEventFD(FileDescriptor(rawValue: efd))
+          //  try ring.registerEventFD(FileDescriptor(rawValue: efd))
             let readSrc = DispatchSource.makeReadSource(fileDescriptor: efd)
             var completedOperationCount = 0
 
@@ -97,7 +101,7 @@ struct MainApp {
                 })
             readSrc.activate()
 
-            for i in 0..<512 {
+            for i in 0 ..< FILE_COUNT() {
                 ring.prepare(
                     linkedRequests:
                         .opening(

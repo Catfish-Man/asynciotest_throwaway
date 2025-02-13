@@ -13,6 +13,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-system", branch: "david/ioring"),
+        .package(url: "https://github.com/apple/swift-algorithms", from: "1.2.0"),
         // other dependencies
     ],
     targets: [
@@ -21,7 +22,8 @@ let package = Package(
         .executableTarget(
             name: "demo",
             dependencies: [
-                .product(name: "SystemPackage", package: "swift-system"), 
+                .product(name: "SystemPackage", package: "swift-system"),
+                .product(name: "Algorithms", package: "swift-algorithms"),
             ]),
         .testTarget(
             name: "demoTests",

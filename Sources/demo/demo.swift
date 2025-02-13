@@ -3,31 +3,36 @@ import Dispatch
 import Glibc
 import SystemPackage
 
+extension FileDescriptor {
+    static var currentWorkingDirectory: FileDescriptor { return FileDescriptor(rawValue: AT_FDCWD) }
+}
+
+func handleOpenCompletion(_ completion: IOCompletion) {
+    if completion.result < 0 {
+        print("Error opening file \(String(cString: strerror(-completion.result)))")
+    }
+    print("Opened file with result \(completion.result)")
+}
+
+func handleReadCompletion(_ completion: IOCompletion, buffer: IORingBuffer) {
+    if completion.result < 0 {
+        print("Error reading file \(String(cString: strerror(-completion.result)))")
+    } else {
+        buffer.unsafeBuffer.withMemoryRebound(to: UInt8.self) {
+            print("Got \(String(decoding: $0, as: UTF8.self)) with completion \(completion)")
+        }
+    }
+}
+
+func handleCloseCompletion(_ completion: IOCompletion) {
+    print(
+        "Closed file with result \(String(cString: strerror(-completion.result))), completion \(completion)"
+    )
+    CSystem._exit(0)
+}
+
 @main
 struct MainApp {
-    static func handleOpenCompletion(_ completion: IOCompletion) {
-        if completion.result < 0 {
-            print("Error opening file \(String(cString: strerror(-completion.result)))")
-        }
-        print("Opened file with result \(completion.result)")
-    }
-
-    static func handleReadCompletion(_ completion: IOCompletion, ring: borrowing IORing) {
-        if completion.result < 0 {
-            print("Error reading file \(String(cString: strerror(-completion.result)))")
-        } else {
-            if let idx = completion.bufferIndex {
-                print("Got buffer \(ring.registeredBuffers[idx].unsafeBuffer) with completion \(completion)")
-            } else {
-                print("No buffer index for completion \(completion)")
-            }
-        }
-    }
-
-    static func handleCloseCompletion(_ completion: IOCompletion) {
-        print("Closed file with result \(completion.result)")
-        CSystem._exit(0)
-    }
 
     static func main() async throws {
         print("Running...")
@@ -50,7 +55,7 @@ struct MainApp {
                         case 0:
                             handleOpenCompletion(completion)
                         case 1:
-                            handleReadCompletion(completion, ring: ring)
+                            handleReadCompletion(completion, buffer: buffer)
                         case 2:
                             handleCloseCompletion(completion)
                         default:
@@ -61,14 +66,15 @@ struct MainApp {
                     }
                 })
             readSrc.activate()
+
             try ring.submit(
                 linkedRequests:
-                .opening(
-                    "test.txt",
-                    in: FileDescriptor(rawValue: AT_FDCWD),
-                    into: file,
-                    mode: .readOnly
-                ),
+                    .opening(
+                        "test.txt",
+                        in: .currentWorkingDirectory,
+                        into: file,
+                        mode: .readOnly
+                    ),
                 .reading(
                     file,
                     into: buffer
@@ -77,6 +83,7 @@ struct MainApp {
                     file
                 )
             )
+
             sleep(1000)
         } catch (let openErr) {
             print(openErr)

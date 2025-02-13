@@ -7,7 +7,7 @@
       "location" : "https://github.com/apple/swift-system",
       "state" : {
         "branch" : "david/ioring",
-        "revision" : "74366c33418fafe8268d225f56046590ef01d083"
+        "revision" : "0c6ef16ca91cd82ab78a52a5cac83b113ba8e67d"
       }
     }
   ],

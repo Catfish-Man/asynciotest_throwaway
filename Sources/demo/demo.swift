@@ -7,13 +7,21 @@ import SystemPackage
 struct MainApp {
     static func handleOpenCompletion(_ completion: IOCompletion) {
         if completion.result < 0 {
-            print("Error opening file \(String(cString: strerror(completion.result)))")
+            print("Error opening file \(String(cString: strerror(-completion.result)))")
         }
         print("Opened file with result \(completion.result)")
     }
 
-    static func handleReadCompletion(_ completion: IOCompletion, buffer: IORingBuffer) {
-        print("Got buffer \(buffer.unsafeBuffer) with completion \(completion)")
+    static func handleReadCompletion(_ completion: IOCompletion, ring: borrowing IORing) {
+        if completion.result < 0 {
+            print("Error reading file \(String(cString: strerror(-completion.result)))")
+        } else {
+            if let idx = completion.bufferIndex {
+                print("Got buffer \(ring.registeredBuffers[idx].unsafeBuffer) with completion \(completion)")
+            } else {
+                print("No buffer index for completion \(completion)")
+            }
+        }
     }
 
     static func handleCloseCompletion(_ completion: IOCompletion) {
@@ -27,7 +35,6 @@ struct MainApp {
         print("cwd is \(String(cString: cwdbuf))")
         var ring = try IORing(queueDepth: 32)
         do {
-            let parent = try FileDescriptor.open("/home/david/demo/", .readOnly)
             let file = ring.registerFileSlots(count: 1).first!
             let buf = UnsafeMutableRawBufferPointer.allocate(byteCount: 65535, alignment: 0)
             let buffer = ring.registerBuffers(buf).first!
@@ -43,7 +50,7 @@ struct MainApp {
                         case 0:
                             handleOpenCompletion(completion)
                         case 1:
-                            handleReadCompletion(completion, buffer: buffer)
+                            handleReadCompletion(completion, ring: ring)
                         case 2:
                             handleCloseCompletion(completion)
                         default:
@@ -56,12 +63,12 @@ struct MainApp {
             readSrc.activate()
             try ring.submit(
                 linkedRequests:
-                    .opening(
-                        "test.txt",
-                        in: parent,
-                        into: file,
-                        mode: .readOnly
-                    ),
+                .opening(
+                    "test.txt",
+                    in: FileDescriptor(rawValue: AT_FDCWD),
+                    into: file,
+                    mode: .readOnly
+                ),
                 .reading(
                     file,
                     into: buffer

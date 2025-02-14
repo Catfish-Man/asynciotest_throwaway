@@ -9,13 +9,55 @@ extension FileDescriptor {
     static var currentWorkingDirectory: FileDescriptor { return FileDescriptor(rawValue: AT_FDCWD) }
 }
 
-func FILE_COUNT() -> UInt32 { 512 }
+func FILE_COUNT() -> UInt32 { 64 }
 func FILE_COUNT() -> Int { Int(FILE_COUNT() as UInt32) }
+var FILE_SIZE: Int { 16 }
 
 @main
 struct MainApp {
 
+    static func plain() async throws {
+        print("Running with DispatchQueue.concurrentPerform + synchronous IO")
+        let sum = Atomic(0)
+        let verificationSum = 16 * 1024 * 1024 * FILE_COUNT()
+        DispatchQueue.concurrentPerform(iterations: 64) { iter in
+            let chunk = UnsafeMutableRawBufferPointer.allocate(
+                byteCount: 16 * 1024 * 1024, alignment: 0)
+            chunk.initializeMemory(as: UInt8.self, repeating: 2)
+            let filename = "testdatafile\(iter).txt"
+            let writeFD = try! FileDescriptor.open(
+                filename,
+                .readWrite,
+                options: .create,
+                permissions: .ownerReadWrite,
+                retryOnInterrupt: true
+            )
+            try! writeFD.writeAll(chunk)
+            try! writeFD.close()
+            chunk.initializeMemory(as: UInt8.self, repeating: 0)
+            let readFD = try! FileDescriptor.open("testdatafile\(iter).txt", .readOnly)
+            try! readFD.read(into: chunk)
+            try! readFD.close()
+            filename.withCString { cfilename in
+                unlinkat(AT_FDCWD, cfilename, 0)
+            }
+            let result = chunk.reduce(into: Int(0)) { accum, next in
+                accum += Int(next)
+            }
+            sum.wrappingAdd(result, ordering: .sequentiallyConsistent)
+        }
+        let resultSum = sum.load(ordering: .sequentiallyConsistent) / 2
+        print(
+            "Sum of all values is \(resultSum), expected result is \(verificationSum)"
+        )
+        _exit(resultSum == verificationSum ? 0 : 1)
+    }
+
     static func main() async throws {
+        if CommandLine.arguments.count == 1 {
+            try await plain()
+        }
+        print("Running with IORing")
         let sum = Atomic(0)
         var verificationSum = 0
         var ring = try IORing(queueDepth: FILE_COUNT() * 7)
@@ -23,16 +65,11 @@ struct MainApp {
         do {
             let files = ring.registerFileSlots(count: FILE_COUNT())
             let slab = UnsafeMutableRawBufferPointer.allocate(
-                byteCount: 16 * FILE_COUNT() * 2, alignment: 0
+                byteCount: 16 * 1024 * 1024 * FILE_COUNT(), alignment: 0
             )
-            slab.initializeMemory(as: Int.self, repeating: 0)
+            slab.initializeMemory(as: UInt8.self, repeating: 2)
+            verificationSum = 16 * 1024 * 1024 * FILE_COUNT() * 2
             let chunks = slab.evenlyChunked(in: FILE_COUNT() * 2)
-
-            for (i, chunk) in zip(0..<FILE_COUNT(), chunks) {
-                verificationSum += i
-                chunk.storeBytes(of: i, as: Int.self)
-            }
-            verificationSum *= 2
             let bPtrs = chunks.lazy.map {
                 UnsafeMutableRawBufferPointer(rebasing: $0)
             }
@@ -67,6 +104,7 @@ struct MainApp {
             var completedOperationCount = 0
 
             let postWriteWork = {
+                slab.initializeMemory(as: UInt8.self, repeating: 0)
                 for i in 0..<FILE_COUNT() {
                     filenames[i].withCString { cfilename in
                         ring.prepare(
@@ -79,7 +117,7 @@ struct MainApp {
                                 ),
                             .reading(
                                 files[i],
-                                into: buffers[i + FILE_COUNT()]
+                                into: buffers[i]
                             ),
                             .closing(
                                 files[i]
@@ -106,8 +144,12 @@ struct MainApp {
                         )
                     }
                     if completion.userData > 0 {
-                        let result = UnsafeRawPointer(bitPattern: UInt(completion.userData))!.load(
-                            as: Int.self)
+                        let bptr = UnsafeRawPointer(bitPattern: UInt(completion.userData))!
+                        let resultBuffer = UnsafeRawBufferPointer(
+                            start: bptr, count: Int(completion.result))
+                        let result = resultBuffer.reduce(into: Int(0)) { accum, next in
+                            accum += Int(next)
+                        }
                         sum.wrappingAdd(result, ordering: .sequentiallyConsistent)
                     }
                     if !doneWriting && completedOperationCount == FILE_COUNT() * 3 {
@@ -116,7 +158,7 @@ struct MainApp {
                         try! postWriteWork()
                     }
                     if doneWriting && completedOperationCount == FILE_COUNT() * 4 {
-                        let resultSum = sum.load(ordering: .sequentiallyConsistent)
+                        let resultSum = sum.load(ordering: .sequentiallyConsistent) / 2
                         print(
                             "Sum of all values is \(resultSum), expected result is \(verificationSum)"
                         )

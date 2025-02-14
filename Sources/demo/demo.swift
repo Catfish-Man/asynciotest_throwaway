@@ -2,59 +2,38 @@ import Algorithms
 import CSystem
 import Dispatch
 import Glibc
+import Synchronization
 import SystemPackage
 
 extension FileDescriptor {
     static var currentWorkingDirectory: FileDescriptor { return FileDescriptor(rawValue: AT_FDCWD) }
 }
 
-func handleOpenCompletion(_ completion: IOCompletion) {
-    if completion.result < 0 {
-        print("Error opening file \(String(cString: strerror(-completion.result)))")
-    }
-    print("Opened file with result \(completion.result)")
-}
-
-func handleReadCompletion(_ completion: IOCompletion, buffer: IORingBuffer) {
-    if completion.result < 0 {
-        print("Error reading file \(String(cString: strerror(-completion.result)))")
-    } else {
-        buffer.unsafeBuffer.withMemoryRebound(to: UInt8.self) {
-            print("Got \(String(decoding: $0, as: UTF8.self)) with completion \(completion)")
-        }
-    }
-}
-
-func handleCloseCompletion(_ completion: IOCompletion) {
-    print(
-        "Closed file with result \(String(cString: strerror(-completion.result))), completion \(completion)"
-    )
-    // CSystem._exit(0)
-}
-
-func FILE_COUNT() -> UInt32 { 16 }
-func FILE_COUNT() -> Int { 16 }
+func FILE_COUNT() -> UInt32 { 512 }
+func FILE_COUNT() -> Int { Int(FILE_COUNT() as UInt32) }
 
 @main
 struct MainApp {
 
     static func main() async throws {
-        print("Running...")
-        let cwdbuf = getcwd(nil, 0)!
-        print("cwd is \(String(cString: cwdbuf))")
-        var ring = try IORing(queueDepth: FILE_COUNT() * 6)
+        let sum = Atomic(0)
+        var verificationSum = 0
+        var ring = try IORing(queueDepth: FILE_COUNT() * 7)
         let filenames = (0..<FILE_COUNT()).map { "testdatafile\($0).txt" }
         do {
             let files = ring.registerFileSlots(count: FILE_COUNT())
             let slab = UnsafeMutableRawBufferPointer.allocate(
-                byteCount: 32 * FILE_COUNT(), alignment: 0
+                byteCount: 16 * FILE_COUNT() * 2, alignment: 0
             )
-            .evenlyChunked(in: FILE_COUNT())
+            slab.initializeMemory(as: Int.self, repeating: 0)
+            let chunks = slab.evenlyChunked(in: FILE_COUNT() * 2)
 
-            for (i, chunk) in zip(0..<FILE_COUNT(), slab) {
+            for (i, chunk) in zip(0..<FILE_COUNT(), chunks) {
+                verificationSum += i
                 chunk.storeBytes(of: i, as: Int.self)
             }
-            let bPtrs = slab.lazy.map {
+            verificationSum *= 2
+            let bPtrs = chunks.lazy.map {
                 UnsafeMutableRawBufferPointer(rebasing: $0)
             }
             let buffers = ring.registerBuffers(bPtrs)
@@ -87,51 +66,73 @@ struct MainApp {
             let readSrc = DispatchSource.makeReadSource(fileDescriptor: efd)
             var completedOperationCount = 0
 
-            readSrc.setEventHandler(
-                handler: DispatchWorkItem {
-                    while let completion = ring.tryConsumeCompletion() {
-                        completedOperationCount += 1
-                        print("Got \(completion), number \(completedOperationCount)")
-                        // switch completedOperationCount {
-                        // case 0:
-                        //     handleOpenCompletion(completion)
-                        // case 1:
-                        //     handleReadCompletion(completion, buffer: buffers[0])
-                        // case 2:
-                        //     handleCloseCompletion(completion)
-                        // default:
-                        //     fatalError()
-                        // }
-
-                    }
-                })
-            readSrc.activate()
-
-            for i in 0..<FILE_COUNT() {
-                filenames[i].withCString { cfilename in
-                    ring.prepare(
-                        linkedRequests:
-                            .opening(
-                                cfilename,
-                                in: .currentWorkingDirectory,
-                                into: files[i],
-                                mode: .readOnly
+            let postWriteWork = {
+                for i in 0..<FILE_COUNT() {
+                    filenames[i].withCString { cfilename in
+                        ring.prepare(
+                            linkedRequests:
+                                .opening(
+                                    cfilename,
+                                    in: .currentWorkingDirectory,
+                                    into: files[i],
+                                    mode: .readOnly
+                                ),
+                            .reading(
+                                files[i],
+                                into: buffers[i + FILE_COUNT()]
                             ),
-                        .reading(
-                            files[i],
-                            into: buffers[i]
-                        ),
-                        .closing(
-                            files[i]
+                            .closing(
+                                files[i]
+                            ),
+                            .unlinking(
+                                cfilename,
+                                in: .currentWorkingDirectory
+                            )
                         )
-                    )
+                    }
+                }
+
+                try ring.submitPreparedRequests()
+            }
+
+            var doneWriting = false
+
+            let handler: DispatchWorkItem = DispatchWorkItem { () -> Void in
+                while let completion = ring.tryConsumeCompletion() {
+                    completedOperationCount += 1
+                    if completion.result < 0 {
+                        print(
+                            "Failed with \(completion), error \(String(cString: strerror(-completion.result))), number: \(completedOperationCount)"
+                        )
+                    }
+                    if completion.userData > 0 {
+                        let result = UnsafeRawPointer(bitPattern: UInt(completion.userData))!.load(
+                            as: Int.self)
+                        sum.wrappingAdd(result, ordering: .sequentiallyConsistent)
+                    }
+                    if !doneWriting && completedOperationCount == FILE_COUNT() * 3 {
+                        doneWriting = true
+                        completedOperationCount = 0
+                        try! postWriteWork()
+                    }
+                    if doneWriting && completedOperationCount == FILE_COUNT() * 4 {
+                        let resultSum = sum.load(ordering: .sequentiallyConsistent)
+                        print(
+                            "Sum of all values is \(resultSum), expected result is \(verificationSum)"
+                        )
+                        _exit(resultSum == verificationSum ? 0 : 1)
+                    }
                 }
             }
+            readSrc.setEventHandler(
+                handler: handler)
+            readSrc.activate()
 
             try ring.submitPreparedRequests()
 
             sleep(1000)
             withExtendedLifetime(filenames) {}
+            withExtendedLifetime(slab) {}
         } catch (let openErr) {
             print(openErr)
         }

@@ -264,8 +264,6 @@ int main(int argc, char *argv[])
 		filenames[i] = strdup(filenameBuf);
 	}
 
-	int efd = eventfd(0, EFD_NONBLOCK);
-
 	for (int i = 0; i < FILE_COUNT; i++) {
 		struct io_uring_sqe *openSQE = io_uring_get_sqe(ring);
 		io_uring_prep_openat_direct(openSQE, AT_FDCWD, filenames[i], O_CREAT, O_RDWR, i);
@@ -281,7 +279,6 @@ int main(int argc, char *argv[])
 		io_uring_prep_close_direct(closeSQE, i);
 	}
 
-	io_uring_register_eventfd(ring, efd);
 	memset(slab, 0, sizeof(*slab));
 
 	for (int i = 0; i < FILE_COUNT; i++) {
@@ -292,6 +289,7 @@ int main(int argc, char *argv[])
 		struct io_uring_sqe *readSQE = io_uring_get_sqe(ring);
 		io_uring_prep_read_fixed(readSQE, i, buffers[i].iov_base, 16 * 1024 * 1024, 0, i);
 		readSQE->flags |= IOSQE_IO_LINK;
+		readSQE->user_data = buffers[i].iov_base;
 
 		struct io_uring_sqe *closeSQE = io_uring_get_sqe(ring);
 		io_uring_prep_close_direct(closeSQE, i);
@@ -301,14 +299,30 @@ int main(int argc, char *argv[])
 		io_uring_prep_unlinkat(unlinkSQE, AT_FDCWD, filenames[i], 0);
 	}
 
-	struct epoll_event ev;
-	ev.events = EPOLLIN | EPOLLET;	
-	ev.data.fd = ;
-
-	epoll_ctl(efd, EPOLL_CTL_ADD, fd_to_monitor, &ev);
-
-	io_uring_submit(ring);
-
-	io_uring_queue_exit(&ring);
-	return ret;
+	int completedOperationCount = 0;
+	bool doneWriting = false;
+	uint64_t sum = 0;
+	for (int i = 0; i < FILE_COUNT; i++) {
+		completedOperationCount++;
+		struct io_uring_cqe cqe;
+		int ret = io_uring_wait_cqe(ring, &cqe);
+		if (ret < 0) {
+			printf("Failed with %s", syserror(ret));
+		} else {
+			if (cqe.user_data > 0) {
+				completedOperationCount++;
+				sum += *((int *)cqe.user_data);
+			}
+			if (!doneWriting && completedOperationCount == FILE_COUNT * 3) {
+				doneWriting = true;
+				completedOperationCount = 0;
+			}
+			if (doneWriting && completedOperationCount == FILE_COUNT * 4) {
+				print("Sum of all values is %lu, expected result is %lu", sum, verificationSum);
+				_exit(sum == verificationSum ? 0 : 1);
+			}
+		}
+	}
+	
+	return 0;
 }

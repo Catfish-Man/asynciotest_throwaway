@@ -54,7 +54,7 @@ struct MainApp {
     }
 
     static func main() async throws {
-        if CommandLine.arguments.count == 1 {
+        if CommandLine.arguments.count == 2 {
             try await plain()
         }
         print("Running with IORing")

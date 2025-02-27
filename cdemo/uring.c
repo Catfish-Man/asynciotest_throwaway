@@ -16,6 +16,7 @@
 #include "liburing.h"
 #include <sys/eventfd.h>
 #include <fcntl.h>
+#include <linux/fcntl.h>
 
 #define FILE_COUNT 64
 

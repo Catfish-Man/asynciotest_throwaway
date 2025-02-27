@@ -16,7 +16,6 @@
 #include "liburing.h"
 #include <sys/eventfd.h>
 #include <fcntl.h>
-#include <linux/fcntl.h>
 
 #define FILE_COUNT 64
 
@@ -96,6 +95,8 @@ int main(int argc, char *argv[])
 		struct io_uring_sqe *unlinkSQE = io_uring_get_sqe(ring);
 		io_uring_prep_unlinkat(unlinkSQE, AT_FDCWD, filenames[i], 0);
 	}
+
+	io_uring_submit(ring);
 
 	int completedOperationCount = 0;
 	bool doneWriting = false;

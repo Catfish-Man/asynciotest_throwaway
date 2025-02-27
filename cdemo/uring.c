@@ -17,7 +17,7 @@
 #include <sys/eventfd.h>
 #include <fcntl.h>
 
-#define FILE_COUNT 64
+#define FILE_COUNT 64ul
 
 static int setup_context(unsigned entries, struct io_uring *ring)
 {
@@ -36,7 +36,7 @@ struct io_uring *ring;
 
 int main(int argc, char *argv[])
 {
-	unsigned long verificationSum = 0;
+	uint64_t verificationSum = 16ul * 1024ul * 1024ul * FILE_COUNT * 2ul;
 	ring = malloc(sizeof(struct io_uring));	
 	if (setup_context(FILE_COUNT * 7, ring))
 		return 1;
@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
 	io_uring_register_files(ring, files, FILE_COUNT);
 
 	void *slab = calloc(FILE_COUNT, 16 * 1024 * 1024);
-	memset(slab, 2, sizeof(*slab));
+	memset(slab, 2, 16 * 1024 * 1024 * FILE_COUNT);
 
 	struct iovec *buffers = calloc(sizeof(struct iovec), FILE_COUNT);
 	for (int i = 0; i < FILE_COUNT; i++) {
@@ -75,6 +75,16 @@ int main(int argc, char *argv[])
 		struct io_uring_sqe *closeSQE = io_uring_get_sqe(ring);
 		io_uring_prep_close_direct(closeSQE, i);
 	}
+	io_uring_submit(ring);
+
+	for (int i = 0; i < FILE_COUNT * 3; i++) {
+		struct io_uring_cqe *cqe;
+		int ret = io_uring_wait_cqe(ring, &cqe);
+		io_uring_cqe_seen(ring, cqe);
+		if (ret < 0) {
+			printf("Failed with %s", strerror(ret));
+		}
+	}
 
 	memset(slab, 0, sizeof(*slab));
 
@@ -99,9 +109,8 @@ int main(int argc, char *argv[])
 	io_uring_submit(ring);
 
 	int completedOperationCount = 0;
-	bool doneWriting = false;
 	uint64_t sum = 0;
-	for (int i = 0; i < FILE_COUNT; i++) {
+	for (int i = 0; i < FILE_COUNT * 4; i++) {
 		completedOperationCount++;
 		struct io_uring_cqe *cqe;
 		int ret = io_uring_wait_cqe(ring, &cqe);
@@ -113,16 +122,8 @@ int main(int argc, char *argv[])
 				completedOperationCount++;
 				sum += *((int *)cqe->user_data);
 			}
-			if (!doneWriting && completedOperationCount == FILE_COUNT * 3) {
-				doneWriting = true;
-				completedOperationCount = 0;
-			}
-			if (doneWriting && completedOperationCount == FILE_COUNT * 4) {
-				printf("Sum of all values is %lu, expected result is %lu", sum, verificationSum);
-				_exit(sum == verificationSum ? 0 : 1);
-			}
 		}
 	}
-	
-	return 0;
+	printf("Sum of all values is %lu, expected result is %lu", sum, verificationSum);
+	return sum == verificationSum ? 0 : 1;
 }

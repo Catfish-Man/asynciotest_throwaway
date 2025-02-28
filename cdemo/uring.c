@@ -90,12 +90,10 @@ int main(int argc, char *argv[])
 		struct io_uring_cqe *cqe;
 		int ret = io_uring_wait_cqe(ring, &cqe);
 		io_uring_cqe_seen(ring, cqe);
-		printf("ret %d, res %d and data %lld\n", ret, cqe->res, io_uring_cqe_get_data64(cqe));
 		if (ret < 0 || cqe->res < 0) {
 			printf("Failed with %s and %s, user_data: %lld\n", strerror(ret), strerror(-(cqe->res)), io_uring_cqe_get_data64(cqe));
 		}
 		if (io_uring_cqe_get_data64(cqe) > 0) {
-			printf("completed write chain for %lld\n", io_uring_cqe_get_data64(cqe));
 			completedWriteChains += 1;
 			if (completedWriteChains == FILE_COUNT) {
 				break;
@@ -103,48 +101,49 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	memset(slab, 0, sizeof(*slab));
+	memset(slab, 0, 16 * 1024 * 1024 * FILE_COUNT);
 
 	for (int i = 0; i < FILE_COUNT; i++) {
 		struct io_uring_sqe *openSQE = io_uring_get_sqe(ring);
 		io_uring_prep_openat_direct(openSQE, AT_FDCWD, filenames[i], O_RDONLY, 0, i);
-		openSQE->flags |= IOSQE_IO_LINK;
+		io_uring_sqe_set_flags(openSQE, IOSQE_IO_LINK | IOSQE_CQE_SKIP_SUCCESS);
 
 		struct io_uring_sqe *readSQE = io_uring_get_sqe(ring);
 		io_uring_prep_read_fixed(readSQE, i, buffers[i].iov_base, 16 * 1024 * 1024, 0, i);
-		readSQE->flags |= IOSQE_IO_LINK;
-		readSQE->user_data = (uint64_t)buffers[i].iov_base;
+		io_uring_sqe_set_flags(readSQE, IOSQE_FIXED_FILE | IOSQE_IO_LINK );
+		io_uring_sqe_set_data(readSQE, buffers[i].iov_base);
+
 
 		struct io_uring_sqe *closeSQE = io_uring_get_sqe(ring);
 		io_uring_prep_close_direct(closeSQE, i);
-		closeSQE->flags |= IOSQE_IO_LINK;
+		io_uring_sqe_set_flags(closeSQE, IOSQE_IO_LINK | IOSQE_CQE_SKIP_SUCCESS);
 
 		struct io_uring_sqe *unlinkSQE = io_uring_get_sqe(ring);
 		io_uring_prep_unlinkat(unlinkSQE, AT_FDCWD, filenames[i], 0);
+		io_uring_sqe_set_data64(unlinkSQE, i + 1);
 	}
 
 	io_uring_submit(ring);
 
-	int completedOperationCount = 0;
 	uint64_t sum = 0;
-	for (int i = 0; i < FILE_COUNT * 4; i++) {
-		printf("Saw a result for read chains");
-		completedOperationCount++;
+	int completedReadChains = 0;
+	while (true) {
 		struct io_uring_cqe *cqe;
 		int ret = io_uring_wait_cqe(ring, &cqe);
-		io_uring_cqe_seen(ring, cqe);
 		if (ret < 0 || cqe->res < 0) {
-			printf("Failed with %s and %s\n", strerror(ret), strerror(-(cqe->res)));
-		} else {
-			if (cqe->user_data > 0) {
-				completedOperationCount++;
-				uint8_t *dataPtr = (uint8_t *)io_uring_cqe_get_data(cqe);
-				for (int dataIdx = 0; dataIdx < cqe->res; dataIdx++) {
-					sum += dataPtr[dataIdx];
-				}
-				printf("Running total is %lu", sum);
+			printf("Failed with %s and %s, user_data: %p\n", strerror(ret), strerror(-(cqe->res)), io_uring_cqe_get_data(cqe));
+		} else if (cqe->user_data > 0 && cqe->user_data < FILE_COUNT + 10) {
+			completedReadChains++;
+			if (completedReadChains == FILE_COUNT) {
+				break;
+			}
+		} else if (cqe->user_data > 0) {
+			uint8_t *dataPtr = (uint8_t *)io_uring_cqe_get_data(cqe);
+			for (int dataIdx = 0; dataIdx < cqe->res; dataIdx++) {
+				sum += dataPtr[dataIdx];
 			}
 		}
+		io_uring_cqe_seen(ring, cqe);
 	}
 	printf("Sum of all values is %lu, expected result is %lu", sum, verificationSum);
 	return sum == verificationSum ? 0 : 1;

@@ -17,7 +17,7 @@
 #include <sys/eventfd.h>
 #include <fcntl.h>
 
-#define FILE_COUNT 4ul
+#define FILE_COUNT 64ul
 
 static int setup_context(unsigned entries, struct io_uring *ring)
 {

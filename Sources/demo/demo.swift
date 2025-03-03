@@ -51,12 +51,10 @@ struct MainApp {
             )
         }
 
-        try ring.submitPreparedRequests()
-
-        try ring.blockingConsumeCompletions(minimumCount: FILE_COUNT() * 3) {
+        try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 3) {
             completion, error, done in
             if let error {
-                print(error)
+                throw error
             }
         }
 
@@ -85,9 +83,7 @@ struct MainApp {
             )
         }
 
-        try ring.submitPreparedRequests()
-
-        try ring.blockingConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
+        try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
             completion, error, done in
             if let completion {
                 if completion.result < 0 {
@@ -106,7 +102,7 @@ struct MainApp {
                 }
             }
             if let error {
-                print(error)
+                throw error
             }
         }
         print(

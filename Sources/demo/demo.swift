@@ -17,7 +17,7 @@ struct MainApp {
         var sum = 0
         var verificationSum = 0
         var ring = try IORing(queueDepth: FILE_COUNT() * 7)
-        let filenames = (0..<FILE_COUNT()).map { "testdatafile\($0).txt" }
+        let filenames = (0..<FILE_COUNT()).map { FilePath("testdatafile\($0).txt") }
         do {
             let files = ring.registerFileSlots(count: FILE_COUNT())
             let slab = UnsafeMutableRawBufferPointer.allocate(
@@ -32,26 +32,24 @@ struct MainApp {
             let buffers = ring.registerBuffers(bPtrs)
 
             for i in 0..<FILE_COUNT() {
-                filenames[i].withCString { cfilename in
-                    ring.prepare(
-                        linkedRequests:
-                            .opening(
-                                cfilename,
-                                in: .currentWorkingDirectory,
-                                into: files[i],
-                                mode: .readWrite,
-                                options: .create,
-                                permissions: .ownerReadWrite
-                            ),
-                        .writing(
-                            buffers[i],
-                            into: files[i]
+                ring.prepare(
+                    linkedRequests:
+                        .opening(
+                            filenames[i],
+                            in: .currentWorkingDirectory,
+                            into: files[i],
+                            mode: .readWrite,
+                            options: .create,
+                            permissions: .ownerReadWrite
                         ),
-                        .closing(
-                            files[i]
-                        )
+                    .writing(
+                        buffers[i],
+                        into: files[i]
+                    ),
+                    .closing(
+                        files[i]
                     )
-                }
+                )
             }
 
             try ring.submitPreparedRequests()
@@ -66,28 +64,26 @@ struct MainApp {
             slab.initializeMemory(as: UInt8.self, repeating: 0)
 
             for i in 0..<FILE_COUNT() {
-                filenames[i].withCString { cfilename in
-                    ring.prepare(
-                        linkedRequests:
-                            .opening(
-                                cfilename,
-                                in: .currentWorkingDirectory,
-                                into: files[i],
-                                mode: .readOnly
-                            ),
-                        .reading(
-                            files[i],
-                            into: buffers[i]
+                ring.prepare(
+                    linkedRequests:
+                        .opening(
+                            filenames[i],
+                            in: .currentWorkingDirectory,
+                            into: files[i],
+                            mode: .readOnly
                         ),
-                        .closing(
-                            files[i]
-                        ),
-                        .unlinking(
-                            cfilename,
-                            in: .currentWorkingDirectory
-                        )
+                    .reading(
+                        files[i],
+                        into: buffers[i]
+                    ),
+                    .closing(
+                        files[i]
+                    ),
+                    .unlinking(
+                        filenames[i],
+                        in: .currentWorkingDirectory
                     )
-                }
+                )
             }
 
             try ring.submitPreparedRequests()

@@ -114,7 +114,6 @@ struct MainApp {
                 "Sum of all values is \(sum), expected result is \(verificationSum)"
             )
             _exit(sum == verificationSum ? 0 : 1)
-            withExtendedLifetime(slab) {}
         } catch (let openErr) {
             print(openErr)
         }

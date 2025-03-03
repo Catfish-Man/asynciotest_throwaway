@@ -23,9 +23,10 @@ struct MainApp {
         )
         slab.initializeMemory(as: UInt8.self, repeating: 2)
         let verificationSum = 16 * 1024 * 1024 * FILE_COUNT() * 2
-        let buffers = ring.registerBuffers(slab.evenlyChunked(in: FILE_COUNT()).lazy.map {
-            UnsafeMutableRawBufferPointer(rebasing: $0)
-        })
+        let buffers = ring.registerBuffers(
+            slab.evenlyChunked(in: FILE_COUNT()).lazy.map {
+                UnsafeMutableRawBufferPointer(rebasing: $0)
+            })
 
         for i in 0..<FILE_COUNT() {
             ring.prepare(
@@ -68,7 +69,8 @@ struct MainApp {
                     ),
                 .reading(
                     files[i],
-                    into: buffers[i]
+                    into: buffers[i],
+                    userData: UInt64(UInt(bitPattern: buffers[i].unsafeBuffer.baseAddress!))
                 ),
                 .closing(
                     files[i]
@@ -82,15 +84,13 @@ struct MainApp {
 
         try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
             completion, error, done in
-            if let completion {
-                if completion.userData > 0 {
-                    let bptr = UnsafeRawPointer(bitPattern: UInt(completion.userData))!
-                    let resultBuffer = UnsafeRawBufferPointer(
-                        start: bptr, count: Int(completion.result))
-                    let result = resultBuffer.reduce(into: Int(0)) { accum, next in
-                        accum += Int(next)
-                    }
-                    sum += result
+            if let completion, completion.userData > 0 {
+                let resultBuffer = UnsafeRawBufferPointer(
+                    start: completion.userPointer,
+                    count: Int(completion.result)
+                )
+                sum += resultBuffer.reduce(into: Int(0)) { accum, next in
+                    accum += Int(next)
                 }
             }
             if let error {

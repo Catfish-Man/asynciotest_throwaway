@@ -83,11 +83,6 @@ struct MainApp {
         try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
             completion, error, done in
             if let completion {
-                if completion.result < 0 {
-                    print(
-                        "Failed with \(completion), error \(String(cString: strerror(-completion.result)))"
-                    )
-                }
                 if completion.userData > 0 {
                     let bptr = UnsafeRawPointer(bitPattern: UInt(completion.userData))!
                     let resultBuffer = UnsafeRawBufferPointer(

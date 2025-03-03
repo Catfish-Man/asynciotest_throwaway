@@ -15,7 +15,6 @@ func FILE_COUNT() -> Int { Int(FILE_COUNT() as UInt32) }
 struct MainApp {
     static func main() async throws {
         var sum = 0
-        var verificationSum = 0
         var ring = try IORing(queueDepth: FILE_COUNT() * 7)
         let filenames = (0..<FILE_COUNT()).map { FilePath("testdatafile\($0).txt") }
         let files = ring.registerFileSlots(count: FILE_COUNT())
@@ -23,12 +22,10 @@ struct MainApp {
             byteCount: 16 * 1024 * 1024 * FILE_COUNT(), alignment: 0
         )
         slab.initializeMemory(as: UInt8.self, repeating: 2)
-        verificationSum = 16 * 1024 * 1024 * FILE_COUNT() * 2
-        let chunks = slab.evenlyChunked(in: FILE_COUNT())
-        let bPtrs = chunks.lazy.map {
+        let verificationSum = 16 * 1024 * 1024 * FILE_COUNT() * 2
+        let buffers = ring.registerBuffers(slab.evenlyChunked(in: FILE_COUNT()).lazy.map {
             UnsafeMutableRawBufferPointer(rebasing: $0)
-        }
-        let buffers = ring.registerBuffers(bPtrs)
+        })
 
         for i in 0..<FILE_COUNT() {
             ring.prepare(

@@ -83,7 +83,7 @@ struct MainApp {
         }
 
         try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
-            completion, error, done in
+            (completion: consuming IOCompletion?, error, done) in
             if let completion, completion.userData > 0 {
                 let resultBuffer = UnsafeRawBufferPointer(
                     start: completion.userPointer,

@@ -15,15 +15,15 @@ func FILE_COUNT() -> Int { Int(FILE_COUNT() as UInt32) }
 struct MainApp {
     static func main() async throws {
         var sum = 0
-        var ring = try IORing(queueDepth: FILE_COUNT() * 7)
+        var ring = try IORing(queueDepth: FILE_COUNT() * 7, flags: [])
         let filenames = (0..<FILE_COUNT()).map { FilePath("testdatafile\($0).txt") }
-        let files = ring.registerFileSlots(count: FILE_COUNT())
+        let files = try ring.registerFileSlots(count: FILE_COUNT())
         let slab = UnsafeMutableRawBufferPointer.allocate(
             byteCount: 16 * 1024 * 1024 * FILE_COUNT(), alignment: 0
         )
         slab.initializeMemory(as: UInt8.self, repeating: 2)
         let verificationSum = 16 * 1024 * 1024 * FILE_COUNT() * 2
-        let buffers = ring.registerBuffers(
+        let buffers = try ring.registerBuffers(
             slab.evenlyChunked(in: FILE_COUNT()).lazy.map {
                 UnsafeMutableRawBufferPointer(rebasing: $0)
             })
@@ -31,19 +31,19 @@ struct MainApp {
         for i in 0..<FILE_COUNT() {
             ring.prepare(
                 linkedRequests:
-                    .opening(
-                        filenames[i],
-                        in: .currentWorkingDirectory,
-                        into: files[i],
-                        mode: .readWrite,
-                        options: .create,
-                        permissions: .ownerReadWrite
-                    ),
-                .writing(
+                .open(
+                    filenames[i],
+                    in: .currentWorkingDirectory,
+                    into: files[i],
+                    mode: .readWrite,
+                    options: .create,
+                    permissions: .ownerReadWrite
+                ),
+                .write(
                     buffers[i],
                     into: files[i]
                 ),
-                .closing(
+                .close(
                     files[i]
                 )
             )
@@ -61,21 +61,21 @@ struct MainApp {
         for i in 0..<FILE_COUNT() {
             ring.prepare(
                 linkedRequests:
-                    .opening(
-                        filenames[i],
-                        in: .currentWorkingDirectory,
-                        into: files[i],
-                        mode: .readOnly
-                    ),
-                .reading(
+                .open(
+                    filenames[i],
+                    in: .currentWorkingDirectory,
+                    into: files[i],
+                    mode: .readOnly
+                ),
+                .read(
                     files[i],
                     into: buffers[i],
-                    userData: UInt64(UInt(bitPattern: buffers[i].unsafeBuffer.baseAddress!))
+                    context: UInt64(UInt(bitPattern: buffers[i].unsafeBuffer.baseAddress!))
                 ),
-                .closing(
+                .close(
                     files[i]
                 ),
-                .unlinking(
+                .unlink(
                     filenames[i],
                     in: .currentWorkingDirectory
                 )
@@ -83,8 +83,8 @@ struct MainApp {
         }
 
         try ring.submitPreparedRequestsAndConsumeCompletions(minimumCount: FILE_COUNT() * 4) {
-            (completion: consuming IOCompletion?, error, done) in
-            if let completion, completion.userData > 0 {
+            (completion, error, done) in
+            if let completion, completion.context > 0 {
                 let resultBuffer = UnsafeRawBufferPointer(
                     start: completion.userPointer,
                     count: Int(completion.result)
